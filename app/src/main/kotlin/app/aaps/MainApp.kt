@@ -460,14 +460,37 @@ class MainApp : DaggerApplication() {
                 .addOnCompleteListener { task ->
                     if (task.isSuccessful) {
                         aapsLogger.debug("RemoteConfig received successfully")
-                        @Suppress("UNCHECKED_CAST")
-                        (versionCheckersUtils::class.declaredMemberProperties.find { it.name == "definition" } as KMutableProperty<Any>?)
-                            ?.let {
-                                val merged = JsonHelper.merge(it.getter.call(versionCheckersUtils) as JSONObject, JSONObject(firebaseRemoteConfig.getString("defs")))
-                                it.setter.call(versionCheckersUtils, merged)
-                            }
+                        applyRemoteVersionDefinition(firebaseRemoteConfig.getString("defs"))
                     } else aapsLogger.error("RemoteConfig fetch failed")
                 }
+        }
+    }
+
+    /**
+     * Merge the version definition received from Firebase RemoteConfig into the local one (assets/definition.json).
+     *
+     * This runs in the Firebase completion listener on the main thread, so it must never throw:
+     * an uncaught exception there kills the process, and because the fetched config is cached
+     * and fetched again on every start, the app would crash on every start.
+     * Firebase returns an empty string when the "defs" parameter is not delivered to this app
+     * instance, which is not valid JSON. In that case (or for any other invalid value) the local
+     * definition is kept.
+     */
+    private fun applyRemoteVersionDefinition(defs: String) {
+        if (defs.isBlank()) {
+            aapsLogger.warn(LTag.CORE, "RemoteConfig: no version definition received, keeping local one")
+            return
+        }
+        try {
+            @Suppress("UNCHECKED_CAST")
+            (versionCheckersUtils::class.declaredMemberProperties.find { it.name == "definition" } as KMutableProperty<Any>?)
+                ?.let {
+                    val merged = JsonHelper.merge(it.getter.call(versionCheckersUtils) as JSONObject, JSONObject(defs))
+                    it.setter.call(versionCheckersUtils, merged)
+                }
+        } catch (e: Exception) {
+            aapsLogger.error(LTag.CORE, "RemoteConfig: unable to apply version definition, keeping local one", e)
+            fabricPrivacy.logException(e)
         }
     }
 
